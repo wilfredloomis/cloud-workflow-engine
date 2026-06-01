@@ -1,5 +1,5 @@
 name = "cloud-build-worker"
-main = "src/index.js"
+main = "worker/src/index.js"
 compatibility_date = "2024-01-01"
 
 # Environment variables - set these via `wrangler secret put`
