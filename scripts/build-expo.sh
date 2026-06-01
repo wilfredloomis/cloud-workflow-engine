@@ -1,0 +1,34 @@
+#!/bin/bash
+# Build Expo APK
+# Usage: ./build-expo.sh /path/to/project [release|debug]
+
+set -e
+
+PROJECT_DIR="${1:-.}"
+BUILD_MODE="${2:-release}"
+
+cd "$PROJECT_DIR" || exit 1
+
+echo "=== Building Expo APK (${BUILD_MODE}) ==="
+
+npm install
+npx expo prebuild --platform android --non-interactive
+
+cd android
+chmod +x gradlew
+
+if [ "$BUILD_MODE" = "release" ]; then
+  ./gradlew assembleRelease
+else
+  ./gradlew assembleDebug
+fi
+
+APK_PATH="app/build/outputs/apk/${BUILD_MODE}/app-${BUILD_MODE}.apk"
+
+if [ -f "$APK_PATH" ]; then
+  echo "APK built successfully: $APK_PATH"
+  echo "Size: $(du -h "$APK_PATH" | cut -f1)"
+else
+  echo "APK not found at expected path, searching..."
+  find . -name "*.apk" -type f
+fi

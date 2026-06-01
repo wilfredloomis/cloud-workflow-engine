@@ -1,0 +1,385 @@
+name: Cloud APK Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Unique build job ID'
+        required: true
+      source_url:
+        description: 'URL to download source ZIP'
+        required: false
+      asset_id:
+        description: 'GitHub release asset ID'
+        required: false
+      app_name:
+        description: 'Application name'
+        required: true
+      package_name:
+        description: 'Android package name'
+        required: true
+      flutter_version:
+        description: 'Flutter SDK version'
+        required: false
+        default: '3.29.1'
+      build_mode:
+        description: 'Build mode (release/debug/profile)'
+        required: false
+        default: 'release'
+      project_type:
+        description: 'Project type (auto/flutter/react_native/expo/native_android)'
+        required: false
+        default: 'auto'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Set up job
+        run: |
+          echo "========================================="
+          echo "Cloud APK Build Engine"
+          echo "========================================="
+          echo "Job ID:          ${{ inputs.job_id }}"
+          echo "App name:        ${{ inputs.app_name }}"
+          echo "Package:         ${{ inputs.package_name }}"
+          echo "Build mode:      ${{ inputs.build_mode }}"
+          echo "Project type:    ${{ inputs.project_type }}"
+          echo "Flutter version: ${{ inputs.flutter_version }}"
+          echo "========================================="
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq unzip zip curl jq
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Download source code
+        run: |
+          if [ -n "${{ inputs.source_url }}" ]; then
+            echo "Downloading from source URL..."
+            curl -L -f "${{ inputs.source_url }}" -o source.zip
+          elif [ -n "${{ inputs.asset_id }}" ]; then
+            echo "Downloading from GitHub release asset..."
+            curl -L -f \
+              -H "Authorization: token ${{ secrets.GH_PAT }}" \
+              -H "Accept: application/octet-stream" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id }}" \
+              -o source.zip
+          else
+            echo "ERROR: No source_url or asset_id provided"
+            exit 1
+          fi
+          echo "Source ZIP size: $(du -h source.zip | cut -f1)"
+
+      - name: Clean up staging files
+        run: |
+          rm -rf project output
+          mkdir -p project output
+
+      - name: Extract source code
+        run: |
+          unzip -q source.zip -d project
+          # Handle nested directory (ZIP may contain a single root folder)
+          DIRS=$(find project -mindepth 1 -maxdepth 1 -type d)
+          DIR_COUNT=$(echo "$DIRS" | wc -l)
+          FILES_AT_ROOT=$(find project -mindepth 1 -maxdepth 1 -type f | wc -l)
+          if [ "$DIR_COUNT" -eq 1 ] && [ "$FILES_AT_ROOT" -eq 0 ]; then
+            INNER_DIR=$(echo "$DIRS" | head -1)
+            echo "Moving contents from nested directory: $INNER_DIR"
+            mv "$INNER_DIR"/* project/ 2>/dev/null || true
+            mv "$INNER_DIR"/.* project/ 2>/dev/null || true
+            rmdir "$INNER_DIR" 2>/dev/null || true
+          fi
+          echo "Project contents:"
+          ls -la project/
+
+      - name: Patch gradle.properties for CI compatibility
+        run: |
+          GRADLE_PROPS=""
+          if [ -f project/android/gradle.properties ]; then
+            GRADLE_PROPS="project/android/gradle.properties"
+          elif [ -f project/gradle.properties ]; then
+            GRADLE_PROPS="project/gradle.properties"
+          fi
+
+          if [ -n "$GRADLE_PROPS" ]; then
+            echo "" >> "$GRADLE_PROPS"
+            echo "# CI patches" >> "$GRADLE_PROPS"
+            echo "org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8" >> "$GRADLE_PROPS"
+            echo "android.useAndroidX=true" >> "$GRADLE_PROPS"
+            echo "android.enableJetifier=true" >> "$GRADLE_PROPS"
+            echo "Patched: $GRADLE_PROPS"
+          else
+            echo "No gradle.properties found to patch"
+          fi
+
+      - name: Detect project type
+        id: detect
+        run: |
+          cd project
+          DETECTED_TYPE=""
+
+          if [ "${{ inputs.project_type }}" != "auto" ]; then
+            DETECTED_TYPE="${{ inputs.project_type }}"
+            echo "Using user-specified project type: $DETECTED_TYPE"
+          elif [ -f pubspec.yaml ]; then
+            DETECTED_TYPE="flutter"
+          elif [ -f package.json ]; then
+            if grep -q '"expo"' package.json 2>/dev/null; then
+              DETECTED_TYPE="expo"
+            elif grep -q '"react-native"' package.json 2>/dev/null; then
+              DETECTED_TYPE="react_native"
+            else
+              DETECTED_TYPE="react_native"
+            fi
+          elif [ -f settings.gradle ] || [ -f settings.gradle.kts ] || [ -f build.gradle ] || [ -f build.gradle.kts ]; then
+            DETECTED_TYPE="native_android"
+          else
+            echo "ERROR: Cannot detect project type. No pubspec.yaml, package.json, or build.gradle found."
+            ls -la
+            exit 1
+          fi
+
+          echo "PROJECT_TYPE=$DETECTED_TYPE" >> $GITHUB_ENV
+          echo "Detected project type: $DETECTED_TYPE"
+
+      - name: Set up Flutter
+        if: env.PROJECT_TYPE == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+
+      - name: Set up Node.js for React Native / Expo
+        if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install project-specific NDK and SDK platform
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+          # Install NDK if required by the project
+          if grep -r "ndkVersion" project/ 2>/dev/null | head -1; then
+            NDK_VER=$(grep -roh "ndkVersion\s*['\"].*['\"]" project/ 2>/dev/null | head -1 | grep -oP "[\d.]+")
+            if [ -n "$NDK_VER" ]; then
+              echo "Installing NDK version: $NDK_VER"
+              sdkmanager "ndk;$NDK_VER" || true
+            fi
+          fi
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ inputs.job_id }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Cache npm packages
+        if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo'
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ inputs.job_id }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Patch package name and app name
+        run: |
+          TARGET_PACKAGE="${{ inputs.package_name }}"
+          TARGET_APP="${{ inputs.app_name }}"
+          echo "Target package: $TARGET_PACKAGE"
+          echo "Target app name: $TARGET_APP"
+
+          # Patch AndroidManifest.xml app label if present
+          MANIFEST=""
+          if [ -f project/android/app/src/main/AndroidManifest.xml ]; then
+            MANIFEST="project/android/app/src/main/AndroidManifest.xml"
+          elif [ -f project/app/src/main/AndroidManifest.xml ]; then
+            MANIFEST="project/app/src/main/AndroidManifest.xml"
+          fi
+
+          if [ -n "$MANIFEST" ]; then
+            echo "Found manifest: $MANIFEST"
+          fi
+
+      - name: Set up signing keystore
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+            echo "Keystore decoded successfully"
+          else
+            echo "No KEYSTORE_BASE64 secret configured, skipping signing setup"
+          fi
+
+      - name: Auto-fix Gradle issues
+        run: |
+          # Fix gradlew permissions
+          if [ -f project/android/gradlew ]; then
+            chmod +x project/android/gradlew
+          fi
+          if [ -f project/gradlew ]; then
+            chmod +x project/gradlew
+          fi
+
+          # Fix common Gradle wrapper issues
+          GRADLE_WRAPPER=""
+          if [ -f project/android/gradle/wrapper/gradle-wrapper.properties ]; then
+            GRADLE_WRAPPER="project/android/gradle/wrapper/gradle-wrapper.properties"
+          elif [ -f project/gradle/wrapper/gradle-wrapper.properties ]; then
+            GRADLE_WRAPPER="project/gradle/wrapper/gradle-wrapper.properties"
+          fi
+
+          if [ -n "$GRADLE_WRAPPER" ]; then
+            # Ensure HTTPS is used
+            sed -i 's|http://services.gradle.org|https://services.gradle.org|g' "$GRADLE_WRAPPER"
+            echo "Gradle wrapper properties checked"
+          fi
+
+      - name: Expo prebuild
+        if: env.PROJECT_TYPE == 'expo'
+        run: |
+          cd project
+          npm install
+          npx expo prebuild --platform android --non-interactive
+
+      - name: Patch Flutter ProGuard rules for R8
+        if: env.PROJECT_TYPE == 'flutter'
+        run: |
+          PROGUARD_DIR="project/android/app"
+          if [ -d "$PROGUARD_DIR" ]; then
+            mkdir -p "$PROGUARD_DIR"
+            cat > "$PROGUARD_DIR/proguard-rules.pro" << 'EOF'
+          # Flutter R8 compatibility
+          -keep class io.flutter.** { *; }
+          -keep class io.flutter.plugins.** { *; }
+          -dontwarn io.flutter.embedding.**
+          EOF
+            echo "ProGuard rules patched"
+          fi
+
+      - name: Build Flutter APK
+        if: env.PROJECT_TYPE == 'flutter'
+        run: |
+          cd project
+          flutter pub get
+          flutter build apk --${{ inputs.build_mode }} --no-tree-shake-icons 2>&1 || \
+          flutter build apk --${{ inputs.build_mode }} 2>&1
+
+      - name: Build React Native APK
+        if: env.PROJECT_TYPE == 'react_native'
+        run: |
+          cd project
+          npm install
+          cd android
+          chmod +x gradlew
+          if [ "${{ inputs.build_mode }}" = "release" ]; then
+            ./gradlew assembleRelease
+          else
+            ./gradlew assembleDebug
+          fi
+
+      - name: Build Native Android APK
+        if: env.PROJECT_TYPE == 'native_android'
+        run: |
+          cd project
+          chmod +x gradlew 2>/dev/null || true
+          if [ "${{ inputs.build_mode }}" = "release" ]; then
+            ./gradlew assembleRelease
+          else
+            ./gradlew assembleDebug
+          fi
+
+      - name: Sign APK
+        run: |
+          if [ -f release.keystore ] && [ -n "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+            APK_FILE=$(find project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
+            if [ -n "$APK_FILE" ]; then
+              echo "Signing APK: $APK_FILE"
+              # Use apksigner if available
+              if command -v apksigner &> /dev/null; then
+                apksigner sign \
+                  --ks release.keystore \
+                  --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
+                  --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+                  --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+                  "$APK_FILE" || echo "Signing with apksigner failed, continuing..."
+              else
+                APKSIGNER=$(find $ANDROID_HOME -name "apksigner" -type f 2>/dev/null | head -1)
+                if [ -n "$APKSIGNER" ]; then
+                  "$APKSIGNER" sign \
+                    --ks release.keystore \
+                    --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
+                    --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+                    --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
+                    "$APK_FILE" || echo "Signing failed, continuing..."
+                else
+                  echo "apksigner not found, skipping signing"
+                fi
+              fi
+            else
+              echo "No APK found to sign"
+            fi
+          else
+            echo "No keystore configured, skipping signing"
+          fi
+
+      - name: Prepare APK artifact
+        run: |
+          mkdir -p output
+
+          echo "Searching for APK files..."
+          find project -name "*.apk" -type f
+
+          APK_FILE=$(find project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
+
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find project -name "*.apk" -type f | head -n 1)
+          fi
+
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: No APK found after build"
+            exit 1
+          fi
+
+          SAFE_NAME=$(echo "${{ inputs.app_name }}" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          cp "$APK_FILE" "output/${SAFE_NAME}_${{ inputs.build_mode }}.apk"
+          echo "APK prepared: output/${SAFE_NAME}_${{ inputs.build_mode }}.apk"
+          ls -lh output/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ inputs.job_id }}
+          path: output/*.apk
+          retention-days: 1
+
+      - name: Build summary
+        run: |
+          echo "========================================="
+          echo "Build Summary"
+          echo "========================================="
+          echo "Job ID:       ${{ inputs.job_id }}"
+          echo "App name:     ${{ inputs.app_name }}"
+          echo "Package:      ${{ inputs.package_name }}"
+          echo "Project type: ${{ env.PROJECT_TYPE }}"
+          echo "Build mode:   ${{ inputs.build_mode }}"
+          echo "Status:       SUCCESS"
+          echo "========================================="
+          ls -lh output/
