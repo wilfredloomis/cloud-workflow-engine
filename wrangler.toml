@@ -1,4 +1,4 @@
-name = "cloud-build-worker"
+name = "cloud-workflow-engine"
 main = "worker/src/index.js"
 compatibility_date = "2024-12-01"
 
