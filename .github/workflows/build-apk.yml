@@ -101,26 +101,6 @@ jobs:
           echo "Project contents:"
           ls -la project/
 
-      - name: Patch gradle.properties for CI compatibility
-        run: |
-          GRADLE_PROPS=""
-          if [ -f project/android/gradle.properties ]; then
-            GRADLE_PROPS="project/android/gradle.properties"
-          elif [ -f project/gradle.properties ]; then
-            GRADLE_PROPS="project/gradle.properties"
-          fi
-
-          if [ -n "$GRADLE_PROPS" ]; then
-            echo "" >> "$GRADLE_PROPS"
-            echo "# CI patches" >> "$GRADLE_PROPS"
-            echo "org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8" >> "$GRADLE_PROPS"
-            echo "android.useAndroidX=true" >> "$GRADLE_PROPS"
-            echo "android.enableJetifier=true" >> "$GRADLE_PROPS"
-            echo "Patched: $GRADLE_PROPS"
-          else
-            echo "No gradle.properties found to patch"
-          fi
-
       - name: Detect project type
         id: detect
         run: |
@@ -156,6 +136,12 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ inputs.flutter_version }}
+          channel: stable
+          cache: true
+
+      - name: Flutter doctor
+        if: env.PROJECT_TYPE == 'flutter'
+        run: flutter doctor -v
 
       - name: Set up Node.js for React Native / Expo
         if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo'
@@ -169,12 +155,12 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses || true
 
-      - name: Install project-specific NDK and SDK platform
+      - name: Install Android SDK components
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
+          sdkmanager "platform-tools" "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "build-tools;35.0.0" || true
           # Install NDK if required by the project
           if grep -r "ndkVersion" project/ 2>/dev/null | head -1; then
-            NDK_VER=$(grep -roh "ndkVersion\s*['\"].*['\"]" project/ 2>/dev/null | head -1 | grep -oP "[\d.]+")
+            NDK_VER=$(grep -roh "ndkVersion\s*[=]*\s*['\"].*['\"]" project/ 2>/dev/null | head -1 | grep -oP "[\d.]+")
             if [ -n "$NDK_VER" ]; then
               echo "Installing NDK version: $NDK_VER"
               sdkmanager "ndk;$NDK_VER" || true
@@ -191,6 +177,16 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
+      - name: Cache Flutter pub packages
+        if: env.PROJECT_TYPE == 'flutter'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: flutter-pub-${{ runner.os }}-${{ inputs.job_id }}
+          restore-keys: |
+            flutter-pub-${{ runner.os }}-
+
       - name: Cache npm packages
         if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo'
         uses: actions/cache@v4
@@ -200,6 +196,26 @@ jobs:
           restore-keys: |
             npm-${{ runner.os }}-
 
+      - name: Patch gradle.properties for CI compatibility
+        run: |
+          GRADLE_PROPS=""
+          if [ -f project/android/gradle.properties ]; then
+            GRADLE_PROPS="project/android/gradle.properties"
+          elif [ -f project/gradle.properties ]; then
+            GRADLE_PROPS="project/gradle.properties"
+          fi
+
+          if [ -n "$GRADLE_PROPS" ]; then
+            echo "" >> "$GRADLE_PROPS"
+            echo "# CI patches" >> "$GRADLE_PROPS"
+            echo "org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8" >> "$GRADLE_PROPS"
+            echo "android.useAndroidX=true" >> "$GRADLE_PROPS"
+            echo "android.enableJetifier=true" >> "$GRADLE_PROPS"
+            echo "Patched: $GRADLE_PROPS"
+          else
+            echo "No gradle.properties found to patch"
+          fi
+
       - name: Patch package name and app name
         run: |
           TARGET_PACKAGE="${{ inputs.package_name }}"
@@ -207,7 +223,7 @@ jobs:
           echo "Target package: $TARGET_PACKAGE"
           echo "Target app name: $TARGET_APP"
 
-          # Patch AndroidManifest.xml app label if present
+          # Patch AndroidManifest.xml app label
           MANIFEST=""
           if [ -f project/android/app/src/main/AndroidManifest.xml ]; then
             MANIFEST="project/android/app/src/main/AndroidManifest.xml"
@@ -216,7 +232,8 @@ jobs:
           fi
 
           if [ -n "$MANIFEST" ]; then
-            echo "Found manifest: $MANIFEST"
+            sed -i "s/android:label=\"[^\"]*\"/android:label=\"$TARGET_APP\"/" "$MANIFEST"
+            echo "Patched app name in: $MANIFEST"
           fi
 
       - name: Set up signing keystore
@@ -247,7 +264,6 @@ jobs:
           fi
 
           if [ -n "$GRADLE_WRAPPER" ]; then
-            # Ensure HTTPS is used
             sed -i 's|http://services.gradle.org|https://services.gradle.org|g' "$GRADLE_WRAPPER"
             echo "Gradle wrapper properties checked"
           fi
@@ -259,28 +275,22 @@ jobs:
           npm install
           npx expo prebuild --platform android --non-interactive
 
-      - name: Patch Flutter ProGuard rules for R8
-        if: env.PROJECT_TYPE == 'flutter'
-        run: |
-          PROGUARD_DIR="project/android/app"
-          if [ -d "$PROGUARD_DIR" ]; then
-            mkdir -p "$PROGUARD_DIR"
-            cat > "$PROGUARD_DIR/proguard-rules.pro" << 'EOF'
-          # Flutter R8 compatibility
-          -keep class io.flutter.** { *; }
-          -keep class io.flutter.plugins.** { *; }
-          -dontwarn io.flutter.embedding.**
-          EOF
-            echo "ProGuard rules patched"
-          fi
-
       - name: Build Flutter APK
         if: env.PROJECT_TYPE == 'flutter'
         run: |
           cd project
+          echo "=== Running flutter pub get ==="
           flutter pub get
-          flutter build apk --${{ inputs.build_mode }} --no-tree-shake-icons 2>&1 || \
-          flutter build apk --${{ inputs.build_mode }} 2>&1
+
+          echo "=== Building Flutter APK (${{ inputs.build_mode }}) ==="
+          flutter build apk \
+            --${{ inputs.build_mode }} \
+            --no-tree-shake-icons \
+            --target-platform android-arm,android-arm64,android-x64 \
+            || flutter build apk --${{ inputs.build_mode }}
+
+          echo "=== Build output ==="
+          find build -name "*.apk" -type f 2>/dev/null || true
 
       - name: Build React Native APK
         if: env.PROJECT_TYPE == 'react_native'
@@ -312,26 +322,16 @@ jobs:
             APK_FILE=$(find project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
             if [ -n "$APK_FILE" ]; then
               echo "Signing APK: $APK_FILE"
-              # Use apksigner if available
-              if command -v apksigner &> /dev/null; then
-                apksigner sign \
+              APKSIGNER=$(find $ANDROID_HOME -name "apksigner" -type f 2>/dev/null | sort -r | head -1)
+              if [ -n "$APKSIGNER" ]; then
+                "$APKSIGNER" sign \
                   --ks release.keystore \
                   --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
                   --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
                   --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
-                  "$APK_FILE" || echo "Signing with apksigner failed, continuing..."
+                  "$APK_FILE" || echo "Signing failed, continuing with unsigned APK..."
               else
-                APKSIGNER=$(find $ANDROID_HOME -name "apksigner" -type f 2>/dev/null | head -1)
-                if [ -n "$APKSIGNER" ]; then
-                  "$APKSIGNER" sign \
-                    --ks release.keystore \
-                    --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
-                    --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
-                    --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
-                    "$APK_FILE" || echo "Signing failed, continuing..."
-                else
-                  echo "apksigner not found, skipping signing"
-                fi
+                echo "apksigner not found, skipping signing"
               fi
             else
               echo "No APK found to sign"
@@ -347,6 +347,7 @@ jobs:
           echo "Searching for APK files..."
           find project -name "*.apk" -type f
 
+          # Prefer non-unsigned APKs
           APK_FILE=$(find project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
 
           if [ -z "$APK_FILE" ]; then
