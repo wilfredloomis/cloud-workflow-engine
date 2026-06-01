@@ -223,7 +223,7 @@ jobs:
           echo "Target package: $TARGET_PACKAGE"
           echo "Target app name: $TARGET_APP"
 
-          # Patch AndroidManifest.xml app label
+          # --- Patch app label in AndroidManifest.xml ---
           MANIFEST=""
           if [ -f project/android/app/src/main/AndroidManifest.xml ]; then
             MANIFEST="project/android/app/src/main/AndroidManifest.xml"
@@ -234,6 +234,35 @@ jobs:
           if [ -n "$MANIFEST" ]; then
             sed -i "s/android:label=\"[^\"]*\"/android:label=\"$TARGET_APP\"/" "$MANIFEST"
             echo "Patched app name in: $MANIFEST"
+          fi
+
+          # --- Patch applicationId / namespace in build.gradle ---
+          BUILD_GRADLE=""
+          if [ -f project/android/app/build.gradle ]; then
+            BUILD_GRADLE="project/android/app/build.gradle"
+          elif [ -f project/android/app/build.gradle.kts ]; then
+            BUILD_GRADLE="project/android/app/build.gradle.kts"
+          elif [ -f project/app/build.gradle ]; then
+            BUILD_GRADLE="project/app/build.gradle"
+          elif [ -f project/app/build.gradle.kts ]; then
+            BUILD_GRADLE="project/app/build.gradle.kts"
+          fi
+
+          if [ -n "$BUILD_GRADLE" ]; then
+            # Patch applicationId (Groovy: applicationId "com.old" or applicationId 'com.old')
+            sed -i "s/applicationId\s*[\"'][^\"']*[\"']/applicationId \"$TARGET_PACKAGE\"/" "$BUILD_GRADLE"
+            # Patch namespace (Groovy: namespace "com.old" or namespace 'com.old')
+            sed -i "s/namespace\s*[\"'][^\"']*[\"']/namespace \"$TARGET_PACKAGE\"/" "$BUILD_GRADLE"
+            # Patch Kotlin DSL: applicationId = "com.old"
+            sed -i "s/applicationId\s*=\s*[\"'][^\"']*[\"']/applicationId = \"$TARGET_PACKAGE\"/" "$BUILD_GRADLE"
+            sed -i "s/namespace\s*=\s*[\"'][^\"']*[\"']/namespace = \"$TARGET_PACKAGE\"/" "$BUILD_GRADLE"
+            echo "Patched applicationId/namespace in: $BUILD_GRADLE"
+          fi
+
+          # --- Patch package attribute in AndroidManifest.xml ---
+          if [ -n "$MANIFEST" ]; then
+            sed -i "s/package=\"[^\"]*\"/package=\"$TARGET_PACKAGE\"/" "$MANIFEST"
+            echo "Patched package in manifest: $MANIFEST"
           fi
 
       - name: Set up signing keystore
