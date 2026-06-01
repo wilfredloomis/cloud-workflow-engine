@@ -1,6 +1,6 @@
 name = "cloud-build-worker"
 main = "worker/src/index.js"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-12-01"
 
 # Environment variables - set these via `wrangler secret put`
 # GITHUB_TOKEN - GitHub PAT with repo and actions scope
