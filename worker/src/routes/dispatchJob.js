@@ -2,7 +2,7 @@ import { jsonResponse, errorResponse } from '../utils/json.js';
 import { triggerWorkflow, getLatestRun, getReleaseAssetUrl } from '../github.js';
 import { AppError } from '../utils/errors.js';
 
-async function waitForRun(env, jobId, attempts = 10, delayMs = 2000) {
+async function waitForRun(env, jobId, attempts = 4, delayMs = 1500) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
