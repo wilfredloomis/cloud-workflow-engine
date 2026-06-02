@@ -107,8 +107,18 @@ async function handleJobLive(request, env) {
       const completedSteps = result.steps.filter(
         (s) => s.status === 'completed'
       ).length;
-      result.current_step = completedSteps;
+      const currentStep = result.steps.find((s) => s.status === 'in_progress');
+      result.current_step = completedSteps + (currentStep ? 1 : 0);
       result.total_steps = result.steps.length;
+      result.step_name = currentStep
+        ? currentStep.name
+        : result.steps.length > 0
+        ? result.steps[result.steps.length - 1].name
+        : null;
+    }
+
+    if (run.conclusion === 'failure') {
+      result.error = 'Build failed';
     }
 
     return jsonResponse(result);

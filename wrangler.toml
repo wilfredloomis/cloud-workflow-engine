@@ -7,7 +7,8 @@ compatibility_date = "2024-12-01"
 # GITHUB_OWNER - GitHub username or org
 # GITHUB_REPO - Repository name (cloud-workflow-engine)
 # GITHUB_WORKFLOW_ID - Workflow file name (build-apk.yml)
-# GITHUB_RELEASE_ID - Release ID for source ZIP storage
+# GITHUB_RELEASE_ID - Release ID for source ZIP storage (optional)
+# GITHUB_RELEASE_TAG - Fallback tag for auto-created storage release
 
 [vars]
 ENVIRONMENT = "production"

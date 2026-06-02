@@ -1,4 +1,5 @@
 name: Cloud APK Build
+run-name: Build ${{ inputs.job_id }} - ${{ inputs.app_name }}
 
 on:
   workflow_dispatch:
@@ -17,7 +18,7 @@ on:
         required: true
       package_name:
         description: 'Android package name'
-        required: true
+        required: false
       flutter_version:
         description: 'Flutter SDK version'
         required: false
@@ -27,15 +28,9 @@ on:
         required: false
         default: 'release'
       project_type:
-        description: 'Project type (auto/flutter/react_native/expo/native_android)'
+        description: 'auto/flutter/react_native/expo/native_android/capacitor/cordova/ionic'
         required: false
         default: 'auto'
-
-env:
-  APP_NAME: ${{ inputs.app_name }}
-  PACKAGE_NAME: ${{ inputs.package_name }}
-  FLUTTER_VER: ${{ inputs.flutter_version }}
-  BUILD_MODE: ${{ inputs.build_mode }}
 
 jobs:
   build:
@@ -43,18 +38,25 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set up job
         run: |
           echo "========================================="
           echo "Cloud APK Build Engine"
           echo "========================================="
           echo "Job ID:          ${{ inputs.job_id }}"
-          echo "App name:        $APP_NAME"
-          echo "Package:         $PACKAGE_NAME"
-          echo "Build mode:      $BUILD_MODE"
+          echo "App name:        ${{ inputs.app_name }}"
+          echo "Package:         ${PACKAGE_NAME:-<project default>}"
+          echo "Build mode:      ${{ inputs.build_mode }}"
           echo "Project type:    ${{ inputs.project_type }}"
-          echo "Flutter version: $FLUTTER_VER"
+          echo "Flutter version: ${{ inputs.flutter_version }}"
           echo "========================================="
+        env:
+          PACKAGE_NAME: ${{ inputs.package_name }}
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
 
       - name: Install system dependencies
         run: |
@@ -69,94 +71,52 @@ jobs:
 
       - name: Download source code
         run: |
-          if [ -n "${{ inputs.source_url }}" ]; then
-            echo "Downloading from source URL..."
-            curl -L -f "${{ inputs.source_url }}" -o source.zip
-          elif [ -n "${{ inputs.asset_id }}" ]; then
-            echo "Downloading from GitHub release asset..."
+          if [ -n "${{ inputs.asset_id }}" ]; then
+            echo "Downloading from GitHub release asset with auth..."
             curl -L -f \
               -H "Authorization: token ${{ secrets.GH_PAT }}" \
               -H "Accept: application/octet-stream" \
               "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id }}" \
               -o source.zip
+          elif [ -n "${{ inputs.source_url }}" ]; then
+            echo "Downloading from source URL..."
+            curl -L -f "${{ inputs.source_url }}" -o source.zip
           else
-            echo "ERROR: No source_url or asset_id provided"
+            echo "No source provided"
             exit 1
           fi
           echo "Source ZIP size: $(du -h source.zip | cut -f1)"
 
       - name: Clean up staging files
         run: |
-          rm -rf /tmp/project output
-          mkdir -p /tmp/project output
+          rm -rf project output
+          mkdir -p project output
 
       - name: Extract source code
         run: |
-          unzip -q source.zip -d /tmp/project
-          # Handle nested directory (ZIP may contain a single root folder)
-          DIRS=$(find /tmp/project -mindepth 1 -maxdepth 1 -type d)
+          unzip -q source.zip -d project
+          DIRS=$(find project -mindepth 1 -maxdepth 1 -type d)
           DIR_COUNT=$(echo "$DIRS" | wc -l)
-          FILES_AT_ROOT=$(find /tmp/project -mindepth 1 -maxdepth 1 -type f | wc -l)
+          FILES_AT_ROOT=$(find project -mindepth 1 -maxdepth 1 -type f | wc -l)
           if [ "$DIR_COUNT" -eq 1 ] && [ "$FILES_AT_ROOT" -eq 0 ]; then
             INNER_DIR=$(echo "$DIRS" | head -1)
             echo "Moving contents from nested directory: $INNER_DIR"
-            mv "$INNER_DIR"/* /tmp/project/ 2>/dev/null || true
-            mv "$INNER_DIR"/.* /tmp/project/ 2>/dev/null || true
+            mv "$INNER_DIR"/* project/ 2>/dev/null || true
+            mv "$INNER_DIR"/.* project/ 2>/dev/null || true
             rmdir "$INNER_DIR" 2>/dev/null || true
           fi
           echo "Project contents:"
-          ls -la /tmp/project/
+          ls -la project/
 
       - name: Detect project type
-        id: detect
-        working-directory: /tmp/project
         run: |
-          DETECTED_TYPE=""
-
           if [ "${{ inputs.project_type }}" != "auto" ]; then
-            DETECTED_TYPE="${{ inputs.project_type }}"
-            echo "Using user-specified project type: $DETECTED_TYPE"
-          elif [ -f pubspec.yaml ]; then
-            DETECTED_TYPE="flutter"
-          elif [ -f package.json ]; then
-            if grep -q '"expo"' package.json 2>/dev/null; then
-              DETECTED_TYPE="expo"
-            elif grep -q '"react-native"' package.json 2>/dev/null; then
-              DETECTED_TYPE="react_native"
-            else
-              DETECTED_TYPE="react_native"
-            fi
-          elif [ -f settings.gradle ] || [ -f settings.gradle.kts ] || [ -f build.gradle ] || [ -f build.gradle.kts ]; then
-            DETECTED_TYPE="native_android"
+            PROJECT_TYPE="${{ inputs.project_type }}"
           else
-            echo "ERROR: Cannot detect project type."
-            ls -la
-            exit 1
+            PROJECT_TYPE=$(bash scripts/detect-project.sh project)
           fi
-
-          echo "PROJECT_TYPE=$DETECTED_TYPE" >> $GITHUB_ENV
-          echo "Detected project type: $DETECTED_TYPE"
-
-      - name: Locate build.gradle (Groovy or Kotlin DSL)
-        run: |
-          # Find the app-level build.gradle or build.gradle.kts
-          if [ -f /tmp/project/android/app/build.gradle.kts ]; then
-            echo "BUILD_GRADLE=/tmp/project/android/app/build.gradle.kts" >> $GITHUB_ENV
-            echo "GRADLE_DSL=kts" >> $GITHUB_ENV
-          elif [ -f /tmp/project/android/app/build.gradle ]; then
-            echo "BUILD_GRADLE=/tmp/project/android/app/build.gradle" >> $GITHUB_ENV
-            echo "GRADLE_DSL=groovy" >> $GITHUB_ENV
-          elif [ -f /tmp/project/app/build.gradle.kts ]; then
-            echo "BUILD_GRADLE=/tmp/project/app/build.gradle.kts" >> $GITHUB_ENV
-            echo "GRADLE_DSL=kts" >> $GITHUB_ENV
-          elif [ -f /tmp/project/app/build.gradle ]; then
-            echo "BUILD_GRADLE=/tmp/project/app/build.gradle" >> $GITHUB_ENV
-            echo "GRADLE_DSL=groovy" >> $GITHUB_ENV
-          else
-            echo "BUILD_GRADLE=" >> $GITHUB_ENV
-            echo "GRADLE_DSL=" >> $GITHUB_ENV
-            echo "No build.gradle found"
-          fi
+          echo "PROJECT_TYPE=$PROJECT_TYPE" >> "$GITHUB_ENV"
+          echo "Detected project type: $PROJECT_TYPE"
 
       - name: Set up Flutter
         if: env.PROJECT_TYPE == 'flutter'
@@ -170,8 +130,8 @@ jobs:
         if: env.PROJECT_TYPE == 'flutter'
         run: flutter doctor -v
 
-      - name: Set up Node.js for React Native / Expo
-        if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo'
+      - name: Set up Node.js for JavaScript-based projects
+        if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo' || env.PROJECT_TYPE == 'capacitor' || env.PROJECT_TYPE == 'cordova' || env.PROJECT_TYPE == 'ionic'
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -185,9 +145,8 @@ jobs:
       - name: Install Android SDK components
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "build-tools;35.0.0" || true
-          # Install NDK if required by the project
-          if grep -r "ndkVersion" /tmp/project/ 2>/dev/null | head -1; then
-            NDK_VER=$(grep -roh "ndkVersion\s*[=]*\s*['\"].*['\"]" /tmp/project/ 2>/dev/null | head -1 | grep -oP "[\d.]+")
+          if grep -r "ndkVersion" project/ 2>/dev/null | head -1; then
+            NDK_VER=$(grep -roh "ndkVersion\s*[=]*\s*['\"].*['\"]" project/ 2>/dev/null | head -1 | grep -oP "[\d.]+")
             if [ -n "$NDK_VER" ]; then
               echo "Installing NDK version: $NDK_VER"
               sdkmanager "ndk;$NDK_VER" || true
@@ -208,14 +167,13 @@ jobs:
         if: env.PROJECT_TYPE == 'flutter'
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.pub-cache
+          path: ~/.pub-cache
           key: flutter-pub-${{ runner.os }}-${{ inputs.job_id }}
           restore-keys: |
             flutter-pub-${{ runner.os }}-
 
       - name: Cache npm packages
-        if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo'
+        if: env.PROJECT_TYPE == 'react_native' || env.PROJECT_TYPE == 'expo' || env.PROJECT_TYPE == 'capacitor' || env.PROJECT_TYPE == 'cordova' || env.PROJECT_TYPE == 'ionic'
         uses: actions/cache@v4
         with:
           path: ~/.npm
@@ -226,10 +184,10 @@ jobs:
       - name: Patch gradle.properties for CI compatibility
         run: |
           GRADLE_PROPS=""
-          if [ -f /tmp/project/android/gradle.properties ]; then
-            GRADLE_PROPS="/tmp/project/android/gradle.properties"
-          elif [ -f /tmp/project/gradle.properties ]; then
-            GRADLE_PROPS="/tmp/project/gradle.properties"
+          if [ -f project/android/gradle.properties ]; then
+            GRADLE_PROPS="project/android/gradle.properties"
+          elif [ -f project/gradle.properties ]; then
+            GRADLE_PROPS="project/gradle.properties"
           fi
 
           if [ -n "$GRADLE_PROPS" ]; then
@@ -238,256 +196,101 @@ jobs:
             echo "org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8" >> "$GRADLE_PROPS"
             echo "android.useAndroidX=true" >> "$GRADLE_PROPS"
             echo "android.enableJetifier=true" >> "$GRADLE_PROPS"
-            echo "Patched: $GRADLE_PROPS"
-          else
-            echo "No gradle.properties found to patch"
           fi
 
-      - name: Patch package name and app name
-        run: |
-          TARGET_PACKAGE="$PACKAGE_NAME"
-          TARGET_APP="$APP_NAME"
-          echo "Target package: $TARGET_PACKAGE"
-          echo "Target app name: $TARGET_APP"
+      - name: Patch package name
+        if: ${{ inputs.package_name != '' }}
+        run: bash scripts/patch-package-name.sh project "${{ inputs.package_name }}"
 
-          # --- Patch app label in AndroidManifest.xml ---
-          MANIFEST=""
-          if [ -f /tmp/project/android/app/src/main/AndroidManifest.xml ]; then
-            MANIFEST="/tmp/project/android/app/src/main/AndroidManifest.xml"
-          elif [ -f /tmp/project/app/src/main/AndroidManifest.xml ]; then
-            MANIFEST="/tmp/project/app/src/main/AndroidManifest.xml"
-          fi
-
-          if [ -n "$MANIFEST" ]; then
-            sed -i "s/android:label=\"[^\"]*\"/android:label=\"$TARGET_APP\"/" "$MANIFEST"
-            sed -i "s/package=\"[^\"]*\"/package=\"$TARGET_PACKAGE\"/" "$MANIFEST"
-            echo "Patched manifest: $MANIFEST"
-          fi
-
-          # --- Patch applicationId / namespace in build.gradle ---
-          if [ -n "$BUILD_GRADLE" ] && [ -f "$BUILD_GRADLE" ]; then
-            if [ "$GRADLE_DSL" = "kts" ]; then
-              # Kotlin DSL: applicationId = "com.old" / namespace = "com.old"
-              sed -i "s|applicationId\s*=\s*\"[^\"]*\"|applicationId = \"$TARGET_PACKAGE\"|" "$BUILD_GRADLE"
-              sed -i "s|namespace\s*=\s*\"[^\"]*\"|namespace = \"$TARGET_PACKAGE\"|" "$BUILD_GRADLE"
-            else
-              # Groovy: applicationId "com.old" or applicationId 'com.old'
-              sed -i "s|applicationId\s*[\"'][^\"']*[\"']|applicationId \"$TARGET_PACKAGE\"|" "$BUILD_GRADLE"
-              sed -i "s|namespace\s*[\"'][^\"']*[\"']|namespace \"$TARGET_PACKAGE\"|" "$BUILD_GRADLE"
-            fi
-            echo "Patched applicationId/namespace in: $BUILD_GRADLE"
-          fi
-
-      - name: Write local.properties
-        if: env.PROJECT_TYPE == 'flutter'
-        working-directory: /tmp/project
-        run: |
-          FLUTTER_SDK_PATH=$(dirname $(dirname $(which flutter)))
-          ANDROID_SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-          mkdir -p android
-          printf "sdk.dir=%s\nflutter.sdk=%s\nflutter.buildMode=%s\nflutter.versionName=1.0.0\nflutter.versionCode=1\n" \
-            "$ANDROID_SDK" "$FLUTTER_SDK_PATH" "$BUILD_MODE" > android/local.properties
-          echo "local.properties written ✓ sdk.dir=$ANDROID_SDK  flutter.sdk=$FLUTTER_SDK_PATH"
+      - name: Patch app name
+        run: bash scripts/patch-app-name.sh project "${{ inputs.app_name }}" || true
 
       - name: Set up signing keystore
         run: |
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > /tmp/release.keystore
-            echo "SIGNING_SOURCE=keystore" >> $GITHUB_ENV
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
             echo "Keystore decoded successfully"
-
-            # Write key.properties for Flutter/Gradle signing
-            cat > /tmp/key.properties << EOF
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          storeFile=/tmp/release.keystore
-          EOF
           else
-            echo "SIGNING_SOURCE=none" >> $GITHUB_ENV
             echo "No KEYSTORE_BASE64 secret configured, skipping signing setup"
-          fi
-
-      - name: Inject signing config into build.gradle
-        if: env.SIGNING_SOURCE == 'keystore'
-        run: |
-          if [ -z "$BUILD_GRADLE" ] || [ ! -f "$BUILD_GRADLE" ]; then
-            echo "No build.gradle found, skipping signing injection"
-            exit 0
-          fi
-
-          # Skip if project already has signing configured
-          if grep -q "storeFile\|key.properties\|release.keystore" "$BUILD_GRADLE" 2>/dev/null; then
-            echo "Signing already configured, skipping injection"
-            exit 0
-          fi
-
-          cp /tmp/key.properties /tmp/project/android/key.properties 2>/dev/null || \
-          cp /tmp/key.properties /tmp/project/key.properties 2>/dev/null || true
-
-          if [ "$GRADLE_DSL" = "kts" ]; then
-            # Kotlin DSL signing injection
-            cat > /tmp/signing_patch.kts << 'PATCH'
-          // --- CBE signing config (injected by CI) ---
-          val kp = java.util.Properties()
-          val kf = rootProject.file("key.properties")
-          if (kf.exists()) kp.load(java.io.FileInputStream(kf))
-          PATCH
-            # Insert before android { block
-            sed -i '/^android\s*{/i val kp = java.util.Properties()\nval kf = rootProject.file("key.properties")\nif (kf.exists()) kp.load(java.io.FileInputStream(kf))' "$BUILD_GRADLE"
-            # Add signingConfigs inside android block
-            sed -i '/^android\s*{/a\    signingConfigs {\n        create("release") {\n            keyAlias = kp["keyAlias"] as String?\n            keyPassword = kp["keyPassword"] as String?\n            storeFile = kp["storeFile"]?.let { file(it as String) }\n            storePassword = kp["storePassword"] as String?\n        }\n    }' "$BUILD_GRADLE"
-            # Wire signingConfig into release buildType
-            sed -i '/release\s*{/a\            signingConfig = signingConfigs.getByName("release")' "$BUILD_GRADLE"
-            echo "Kotlin DSL signing config injected"
-          else
-            # Groovy signing injection
-            sed -i '/^android {/i def kp = new Properties(); def kf = rootProject.file("key.properties"); if (kf.exists()) { kp.load(new FileInputStream(kf)) }' "$BUILD_GRADLE"
-            sed -i 's/buildTypes {/signingConfigs { release { keyAlias kp["keyAlias"]; keyPassword kp["keyPassword"]; storeFile kp["storeFile"] ? file(kp["storeFile"]) : null; storePassword kp["storePassword"] } }\n    buildTypes {/' "$BUILD_GRADLE"
-            sed -i '/release {/a\            signingConfig signingConfigs.release' "$BUILD_GRADLE"
-            echo "Groovy signing config injected"
           fi
 
       - name: Auto-fix Gradle issues
         run: |
-          # Fix gradlew permissions
-          for GW in /tmp/project/android/gradlew /tmp/project/gradlew; do
-            [ -f "$GW" ] && chmod +x "$GW"
-          done
+          if [ -f project/android/gradlew ]; then
+            chmod +x project/android/gradlew
+          fi
+          if [ -f project/gradlew ]; then
+            chmod +x project/gradlew
+          fi
+          if [ -f project/android/gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's|http://services.gradle.org|https://services.gradle.org|g' project/android/gradle/wrapper/gradle-wrapper.properties
+          fi
+          if [ -f project/gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's|http://services.gradle.org|https://services.gradle.org|g' project/gradle/wrapper/gradle-wrapper.properties
+          fi
 
-          # Fix Gradle wrapper HTTPS
-          for WP in /tmp/project/android/gradle/wrapper/gradle-wrapper.properties /tmp/project/gradle/wrapper/gradle-wrapper.properties; do
-            if [ -f "$WP" ]; then
-              sed -i 's|http://services.gradle.org|https://services.gradle.org|g' "$WP"
-            fi
-          done
-          echo "Gradle fixes applied ✓"
-
-      - name: Patch Flutter ProGuard rules for R8
-        if: env.PROJECT_TYPE == 'flutter'
+      - name: Build project
         run: |
-          # R8 fails if proguard-rules.pro doesn't suppress Play Core references
-          find /tmp/project/android -name "proguard-rules.pro" | while read PG; do
-            if ! grep -q "com.google.android.play.core.splitcompat" "$PG" 2>/dev/null; then
-              echo "" >> "$PG"
-              echo "# Flutter R8 compatibility (injected by CI)" >> "$PG"
-              echo "-dontwarn com.google.android.play.core.splitcompat.**" >> "$PG"
-              echo "-dontwarn com.google.android.play.core.splitinstall.**" >> "$PG"
-              echo "-dontwarn com.google.android.play.core.tasks.**" >> "$PG"
-              echo "-keep class io.flutter.** { *; }" >> "$PG"
-              echo "-keep class io.flutter.plugins.** { *; }" >> "$PG"
-              echo "-dontwarn io.flutter.embedding.**" >> "$PG"
-              echo "Patched ProGuard: $PG"
-            fi
-          done
-
-      - name: Expo prebuild
-        if: env.PROJECT_TYPE == 'expo'
-        working-directory: /tmp/project
-        run: |
-          npm install
-          npx expo prebuild --platform android --non-interactive
-
-      - name: Build Flutter APK
-        if: env.PROJECT_TYPE == 'flutter'
-        working-directory: /tmp/project
-        run: |
-          echo "=== Running flutter pub get ==="
-          PUB_OUTPUT=$(flutter pub get 2>&1) && PUB_OK=true || PUB_OK=false
-          echo "$PUB_OUTPUT"
-
-          if [ "$PUB_OK" = "false" ]; then
-            # Try auto-fixing SDK version conflicts
-            FIXES=$(echo "$PUB_OUTPUT" | grep -oP 'flutter pub add \K\S+' || true)
-            if [ -n "$FIXES" ]; then
-              echo "Attempting auto-fix for dependency conflicts..."
-              while IFS= read -r pkg_spec; do
-                flutter pub add "$pkg_spec" || true
-              done <<< "$FIXES"
-              flutter pub get
-            else
-              echo "pub get failed with no auto-fix available"
+          case "$PROJECT_TYPE" in
+            flutter)
+              bash scripts/build-flutter.sh project "${{ inputs.build_mode }}"
+              ;;
+            react_native)
+              bash scripts/build-react-native.sh project "${{ inputs.build_mode }}"
+              ;;
+            expo)
+              bash scripts/build-expo.sh project "${{ inputs.build_mode }}"
+              ;;
+            native_android)
+              bash scripts/build-native-android.sh project "${{ inputs.build_mode }}"
+              ;;
+            capacitor)
+              bash scripts/build-capacitor.sh project "${{ inputs.build_mode }}"
+              ;;
+            cordova)
+              bash scripts/build-cordova.sh project "${{ inputs.build_mode }}"
+              ;;
+            ionic)
+              bash scripts/build-ionic.sh project "${{ inputs.build_mode }}"
+              ;;
+            *)
+              echo "Unsupported project type: $PROJECT_TYPE"
               exit 1
-            fi
-          fi
-
-          echo "=== Building Flutter APK ($BUILD_MODE) ==="
-          flutter build apk \
-            --$BUILD_MODE \
-            --no-tree-shake-icons \
-            --target-platform android-arm,android-arm64,android-x64 \
-            || flutter build apk --$BUILD_MODE
-
-          echo "=== Build output ==="
-          find build -name "*.apk" -type f 2>/dev/null || true
-
-      - name: Build React Native APK
-        if: env.PROJECT_TYPE == 'react_native'
-        working-directory: /tmp/project
-        run: |
-          npm install
-          cd android
-          chmod +x gradlew
-          if [ "$BUILD_MODE" = "release" ]; then
-            ./gradlew assembleRelease
-          else
-            ./gradlew assembleDebug
-          fi
-
-      - name: Build Native Android APK
-        if: env.PROJECT_TYPE == 'native_android'
-        working-directory: /tmp/project
-        run: |
-          chmod +x gradlew 2>/dev/null || true
-          if [ "$BUILD_MODE" = "release" ]; then
-            ./gradlew assembleRelease
-          else
-            ./gradlew assembleDebug
-          fi
+              ;;
+          esac
 
       - name: Sign APK
-        if: env.SIGNING_SOURCE == 'keystore'
         run: |
-          APK_FILE=$(find /tmp/project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
-          if [ -n "$APK_FILE" ]; then
-            echo "Signing APK: $APK_FILE"
-            APKSIGNER=$(find $ANDROID_HOME -name "apksigner" -type f 2>/dev/null | sort -r | head -1)
-            if [ -n "$APKSIGNER" ]; then
-              "$APKSIGNER" sign \
-                --ks /tmp/release.keystore \
-                --ks-pass "pass:${{ secrets.KEYSTORE_PASSWORD }}" \
-                --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
-                --key-pass "pass:${{ secrets.KEY_PASSWORD }}" \
-                "$APK_FILE" || echo "Signing with apksigner failed, continuing..."
+          if [ -f release.keystore ] && [ -n "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+            APK_FILE=$(find project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
+            if [ -n "$APK_FILE" ]; then
+              bash scripts/sign-apk.sh \
+                "$APK_FILE" \
+                release.keystore \
+                "${{ secrets.KEYSTORE_PASSWORD }}" \
+                "${{ secrets.KEY_ALIAS }}" \
+                "${{ secrets.KEY_PASSWORD }}" || echo "Signing failed, continuing with unsigned APK..."
             else
-              echo "apksigner not found, skipping"
+              echo "No APK found to sign"
             fi
           else
-            echo "No APK found to sign"
+            echo "No keystore configured, skipping signing"
           fi
 
       - name: Prepare APK artifact
         run: |
           mkdir -p output
-
-          echo "Searching for APK files..."
-          find /tmp/project -name "*.apk" -type f
-
-          # Prefer non-unsigned APKs
-          APK_FILE=$(find /tmp/project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
-
+          find project -name "*.apk" -type f
+          APK_FILE=$(find project -name "*.apk" -not -name "*unsigned*" -type f | head -n 1)
           if [ -z "$APK_FILE" ]; then
-            APK_FILE=$(find /tmp/project -name "*.apk" -type f | head -n 1)
+            APK_FILE=$(find project -name "*.apk" -type f | head -n 1)
           fi
-
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: No APK found after build"
             exit 1
           fi
-
-          SAFE_NAME=$(echo "$APP_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
-          cp "$APK_FILE" "output/${SAFE_NAME}_${BUILD_MODE}.apk"
-          echo "APK prepared: output/${SAFE_NAME}_${BUILD_MODE}.apk"
+          SAFE_NAME=$(echo "${{ inputs.app_name }}" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          cp "$APK_FILE" "output/${SAFE_NAME}_${{ inputs.build_mode }}.apk"
           ls -lh output/
 
       - name: Upload APK artifact
@@ -498,19 +301,17 @@ jobs:
           retention-days: 1
 
       - name: Build summary
-        if: always()
         run: |
-          echo "## Cloud Build Engine — Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Job ID | \`${{ inputs.job_id }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| App name | $APP_NAME |" >> $GITHUB_STEP_SUMMARY
-          echo "| Package | $PACKAGE_NAME |" >> $GITHUB_STEP_SUMMARY
-          echo "| Project type | ${{ env.PROJECT_TYPE }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build mode | $BUILD_MODE |" >> $GITHUB_STEP_SUMMARY
-          if [ -f output/*.apk ]; then
-            echo "| Status | ✅ SUCCESS |" >> $GITHUB_STEP_SUMMARY
-            ls -lh output/
-          else
-            echo "| Status | ❌ FAILED |" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "========================================="
+          echo "Build Summary"
+          echo "========================================="
+          echo "Job ID:       ${{ inputs.job_id }}"
+          echo "App name:     ${{ inputs.app_name }}"
+          echo "Package:      ${PACKAGE_NAME:-<project default>}"
+          echo "Project type: ${{ env.PROJECT_TYPE }}"
+          echo "Build mode:   ${{ inputs.build_mode }}"
+          echo "Status:       SUCCESS"
+          echo "========================================="
+          ls -lh output/
+        env:
+          PACKAGE_NAME: ${{ inputs.package_name }}

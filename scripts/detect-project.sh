@@ -21,11 +21,28 @@ if [ -f package.json ]; then
     echo "expo"
     exit 0
   fi
+  if grep -q '"@capacitor/android"' package.json 2>/dev/null; then
+    echo "capacitor"
+    exit 0
+  fi
+  if grep -q '"cordova-android"' package.json 2>/dev/null; then
+    echo "cordova"
+    exit 0
+  fi
+  if [ -f ionic.config.json ]; then
+    echo "ionic"
+    exit 0
+  fi
   if grep -q '"react-native"' package.json 2>/dev/null; then
     echo "react_native"
     exit 0
   fi
   echo "react_native"
+  exit 0
+fi
+
+if [ -f ionic.config.json ]; then
+  echo "ionic"
   exit 0
 fi
 

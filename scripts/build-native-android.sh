@@ -9,6 +9,10 @@ BUILD_MODE="${2:-release}"
 
 cd "$PROJECT_DIR" || exit 1
 
+if [ ! -f gradlew ] && [ -f android/gradlew ]; then
+  cd android || exit 1
+fi
+
 echo "=== Building Native Android APK (${BUILD_MODE}) ==="
 
 chmod +x gradlew 2>/dev/null || true

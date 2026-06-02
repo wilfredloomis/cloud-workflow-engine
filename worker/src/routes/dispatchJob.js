@@ -15,7 +15,7 @@ async function handleDispatchJob(request, env) {
   const {
     job_id,
     app_name,
-    package_name,
+    package_name = '',
     flutter_version = '3.29.1',
     build_mode = 'release',
     project_type = 'auto',
@@ -25,7 +25,6 @@ async function handleDispatchJob(request, env) {
 
   if (!job_id) return errorResponse('Missing job_id');
   if (!app_name) return errorResponse('Missing app_name');
-  if (!package_name) return errorResponse('Missing package_name');
 
   // Build source URL from asset_id if not provided directly
   let resolvedSourceUrl = source_url || '';
