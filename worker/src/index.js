@@ -5,6 +5,7 @@ import { handlePrepareUpload } from './routes/prepareUpload.js';
 import { handleUpload } from './routes/upload.js';
 import { handleDispatchJob } from './routes/dispatchJob.js';
 import { handleStatus, handleJobLive } from './routes/status.js';
+import { handleLogs } from './routes/logs.js';
 import { handleArtifactInfo, handleArtifactDownload } from './routes/artifact.js';
 import { handleDeleteArtifact } from './routes/deleteArtifact.js';
 
@@ -49,6 +50,11 @@ export default {
           response = await handleJobLive(request, env);
           break;
 
+        case '/logs':
+          if (method !== 'GET') return errorResponse('Method not allowed', 405);
+          response = await handleLogs(request, env);
+          break;
+
         case '/artifact-info':
           if (method !== 'GET') return errorResponse('Method not allowed', 405);
           response = await handleArtifactInfo(request, env);
@@ -77,6 +83,7 @@ export default {
                 'GET|POST /dispatch-job',
                 'GET  /status',
                 'GET  /job-live',
+                'GET  /logs',
                 'GET  /artifact-info',
                 'GET  /artifact',
                 'DELETE /delete-artifact',
