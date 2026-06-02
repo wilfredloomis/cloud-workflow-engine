@@ -49,41 +49,45 @@ async function resolveRunAndJob(request, env) {
 }
 
 async function handleLogs(request, env) {
-  const resolved = await resolveRunAndJob(request, env);
+  try {
+    const resolved = await resolveRunAndJob(request, env);
 
-  if (!resolved) {
-    return errorResponse('Missing run_id or job_id parameter');
-  }
+    if (!resolved) {
+      return errorResponse('Missing run_id or job_id parameter');
+    }
 
-  if (!resolved.runId) {
-    return jsonResponse({
-      run_id: null,
-      workflow_job_id: null,
-      workflow_job_name: null,
-      log: '',
-      ready: false,
-    });
-  }
+    if (!resolved.runId) {
+      return jsonResponse({
+        run_id: null,
+        workflow_job_id: null,
+        workflow_job_name: null,
+        log: '',
+        ready: false,
+      });
+    }
 
-  if (!resolved.workflowJobId) {
+    if (!resolved.workflowJobId) {
+      return jsonResponse({
+        run_id: resolved.runId,
+        workflow_job_id: null,
+        workflow_job_name: null,
+        log: '',
+        ready: false,
+      });
+    }
+
+    const log = await getJobLogs(env, resolved.workflowJobId);
+
     return jsonResponse({
       run_id: resolved.runId,
-      workflow_job_id: null,
-      workflow_job_name: null,
-      log: '',
-      ready: false,
+      workflow_job_id: resolved.workflowJobId,
+      workflow_job_name: resolved.workflowJobName,
+      log,
+      ready: true,
     });
+  } catch (error) {
+    return errorResponse(`Failed to fetch logs: ${error.message}`, 500);
   }
-
-  const log = await getJobLogs(env, resolved.workflowJobId);
-
-  return jsonResponse({
-    run_id: resolved.runId,
-    workflow_job_id: resolved.workflowJobId,
-    workflow_job_name: resolved.workflowJobName,
-    log,
-    ready: true,
-  });
 }
 
 export { handleLogs };
