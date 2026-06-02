@@ -1,18 +1,54 @@
 import { jsonResponse, errorResponse } from '../utils/json.js';
-import { getRunStatus, getRunJobs } from '../github.js';
+import { getLatestRun, getRunStatus, getRunJobs } from '../github.js';
 
-async function handleStatus(request, env) {
+async function resolveRun(request, env) {
   const url = new URL(request.url);
   const runId = url.searchParams.get('run_id');
+  const jobId = url.searchParams.get('job_id');
 
-  if (!runId) {
-    return errorResponse('Missing run_id parameter');
+  if (runId) {
+    return { runId, jobId };
+  }
+
+  if (!jobId) {
+    return null;
+  }
+
+  const run = await getLatestRun(env, jobId);
+  if (!run) {
+    return { runId: null, jobId };
+  }
+
+  return { runId: String(run.id), jobId };
+}
+
+async function handleStatus(request, env) {
+  const resolved = await resolveRun(request, env);
+
+  if (!resolved) {
+    return errorResponse('Missing run_id or job_id parameter');
+  }
+
+  if (!resolved.runId) {
+    return jsonResponse({
+      run_id: null,
+      status: 'queued',
+      conclusion: null,
+      run_number: null,
+      current_step: null,
+      total_steps: null,
+      step_name: 'Waiting for workflow run',
+      steps: [],
+      error: null,
+    });
   }
 
   try {
+    const runId = resolved.runId;
     const run = await getRunStatus(env, runId);
 
     const result = {
+      run_id: String(run.id),
       status: run.status,
       conclusion: run.conclusion || null,
       run_number: run.run_number,
@@ -75,20 +111,35 @@ async function handleStatus(request, env) {
 }
 
 async function handleJobLive(request, env) {
-  const url = new URL(request.url);
-  const runId = url.searchParams.get('run_id');
+  const resolved = await resolveRun(request, env);
 
-  if (!runId) {
-    return errorResponse('Missing run_id parameter');
+  if (!resolved) {
+    return errorResponse('Missing run_id or job_id parameter');
+  }
+
+  if (!resolved.runId) {
+    return jsonResponse({
+      run_id: null,
+      status: 'queued',
+      conclusion: null,
+      run_number: null,
+      current_step: null,
+      total_steps: null,
+      step_name: 'Waiting for workflow run',
+      steps: [],
+      error: null,
+    });
   }
 
   try {
+    const runId = resolved.runId;
     const [run, jobsData] = await Promise.all([
       getRunStatus(env, runId),
       getRunJobs(env, runId),
     ]);
 
     const result = {
+      run_id: String(run.id),
       status: run.status,
       conclusion: run.conclusion || null,
       run_number: run.run_number,
