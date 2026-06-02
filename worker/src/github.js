@@ -95,6 +95,29 @@ async function getRunJobs(env, runId) {
   return githubJson(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs`, env);
 }
 
+async function getJobLogs(env, jobId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
+  const owner = env.GITHUB_OWNER;
+  const repo = env.GITHUB_REPO;
+
+  const response = await githubFetch(
+    `/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`,
+    env,
+    {
+      headers: {
+        Accept: 'application/vnd.github.v3.raw',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to fetch job logs: ${response.status} ${text}`);
+  }
+
+  return response.text();
+}
+
 async function getRunArtifacts(env, runId) {
   requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
@@ -233,6 +256,7 @@ export {
   getLatestRun,
   getRunStatus,
   getRunJobs,
+  getJobLogs,
   getRunArtifacts,
   downloadArtifact,
   deleteArtifact,
