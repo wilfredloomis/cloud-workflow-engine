@@ -2,6 +2,19 @@ import { jsonResponse, errorResponse } from '../utils/json.js';
 import { triggerWorkflow, getLatestRun, getReleaseAssetUrl } from '../github.js';
 import { AppError } from '../utils/errors.js';
 
+async function waitForRun(env, jobId, attempts = 10, delayMs = 2000) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    const run = await getLatestRun(env, jobId);
+    if (run) return run;
+  }
+
+  return null;
+}
+
 async function handleDispatchJob(request, env) {
   let params;
 
@@ -51,9 +64,7 @@ async function handleDispatchJob(request, env) {
       project_type,
     });
 
-    // Wait briefly and then try to get the run ID
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    const run = await getLatestRun(env, job_id);
+    const run = await waitForRun(env, job_id);
 
     return jsonResponse({
       ok: true,
