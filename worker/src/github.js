@@ -136,8 +136,25 @@ async function downloadArtifact(env, artifactId) {
 
   const response = await githubFetch(
     `/repos/${owner}/${repo}/actions/artifacts/${artifactId}/zip`,
-    env
+    env,
+    {
+      redirect: 'manual',
+    }
   );
+
+  if (response.status === 302 || response.status === 301) {
+    const redirectUrl = response.headers.get('Location');
+    if (!redirectUrl) {
+      throw new Error('Artifact download redirect is missing a Location header');
+    }
+
+    const redirectedResponse = await fetch(redirectUrl);
+    if (!redirectedResponse.ok) {
+      throw new Error(`Failed redirected artifact download: ${redirectedResponse.status}`);
+    }
+
+    return redirectedResponse;
+  }
 
   if (!response.ok) {
     throw new Error(`Failed to download artifact: ${response.status}`);
