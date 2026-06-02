@@ -7,17 +7,23 @@ async function resolveRunAndJob(request, env) {
   const buildJobId = url.searchParams.get('job_id');
 
   if (runId) {
-    const jobsData = await getRunJobs(env, runId);
-    const selectedJob =
-      jobsData.jobs?.find((job) => job.conclusion === 'failure') ||
-      jobsData.jobs?.[0] ||
-      null;
-    return {
-      runId,
-      buildJobId,
-      workflowJobId: selectedJob ? String(selectedJob.id) : null,
-      workflowJobName: selectedJob?.name || null,
-    };
+    try {
+      const jobsData = await getRunJobs(env, runId);
+      const selectedJob =
+        jobsData.jobs?.find((job) => job.conclusion === 'failure') ||
+        jobsData.jobs?.[0] ||
+        null;
+      return {
+        runId,
+        buildJobId,
+        workflowJobId: selectedJob ? String(selectedJob.id) : null,
+        workflowJobName: selectedJob?.name || null,
+      };
+    } catch (error) {
+      if (!buildJobId) {
+        throw error;
+      }
+    }
   }
 
   if (!buildJobId) {
