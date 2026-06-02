@@ -54,6 +54,8 @@ wrangler secret put GITHUB_WORKFLOW_ID
 wrangler secret put GITHUB_RELEASE_ID
 ```
 
+`GITHUB_RELEASE_ID` is optional. If you omit it, the Worker will reuse or create a prerelease tagged `cloud-build-storage` for uploaded source ZIPs.
+
 ### 3. Deploy
 
 ```bash

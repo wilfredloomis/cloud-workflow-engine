@@ -1,5 +1,12 @@
 const GITHUB_API = 'https://api.github.com';
 
+function requireGithubConfig(env, keys) {
+  const missing = keys.filter((key) => !env[key]);
+  if (missing.length > 0) {
+    throw new Error(`Missing Worker secrets: ${missing.join(', ')}`);
+  }
+}
+
 async function githubFetch(path, env, options = {}) {
   const url = path.startsWith('http') ? path : `${GITHUB_API}${path}`;
   const headers = {
@@ -27,6 +34,7 @@ async function githubJson(path, env, options = {}) {
 }
 
 async function triggerWorkflow(env, inputs) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
   const workflowId = env.GITHUB_WORKFLOW_ID || 'build-apk.yml';
@@ -53,24 +61,26 @@ async function triggerWorkflow(env, inputs) {
 }
 
 async function getLatestRun(env, jobId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
   const data = await githubJson(
-    `/repos/${owner}/${repo}/actions/runs?per_page=10&event=workflow_dispatch`,
+    `/repos/${owner}/${repo}/actions/runs?per_page=30&event=workflow_dispatch`,
     env
   );
 
-  for (const run of data.workflow_runs) {
-    if (run.name === 'Cloud APK Build') {
-      return run;
-    }
-  }
-
-  return null;
+  return (
+    data.workflow_runs.find(
+      (run) =>
+        run.display_title?.includes(jobId) ||
+        run.name?.includes(jobId)
+    ) || null
+  );
 }
 
 async function getRunStatus(env, runId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
@@ -78,6 +88,7 @@ async function getRunStatus(env, runId) {
 }
 
 async function getRunJobs(env, runId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
@@ -85,6 +96,7 @@ async function getRunJobs(env, runId) {
 }
 
 async function getRunArtifacts(env, runId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
@@ -95,6 +107,7 @@ async function getRunArtifacts(env, runId) {
 }
 
 async function downloadArtifact(env, artifactId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
@@ -111,6 +124,7 @@ async function downloadArtifact(env, artifactId) {
 }
 
 async function deleteArtifact(env, artifactId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
@@ -127,8 +141,52 @@ async function deleteArtifact(env, artifactId) {
   return true;
 }
 
+async function resolveReleaseId(env) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
+  if (env.GITHUB_RELEASE_ID) return env.GITHUB_RELEASE_ID;
+
+  const owner = env.GITHUB_OWNER;
+  const repo = env.GITHUB_REPO;
+  const tag = env.GITHUB_RELEASE_TAG || 'cloud-build-storage';
+
+  const existingResponse = await githubFetch(
+    `/repos/${owner}/${repo}/releases/tags/${tag}`,
+    env
+  );
+
+  if (existingResponse.ok) {
+    const release = await existingResponse.json();
+    return release.id;
+  }
+
+  if (existingResponse.status !== 404) {
+    const text = await existingResponse.text();
+    throw new Error(`Failed to resolve storage release: ${text}`);
+  }
+
+  const createResponse = await githubFetch(`/repos/${owner}/${repo}/releases`, env, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tag_name: tag,
+      name: 'Cloud Build Storage',
+      body: 'Temporary source ZIP storage for Cloud Build Engine uploads.',
+      draft: false,
+      prerelease: true,
+    }),
+  });
+
+  if (!createResponse.ok) {
+    const text = await createResponse.text();
+    throw new Error(`Failed to create storage release: ${text}`);
+  }
+
+  const release = await createResponse.json();
+  return release.id;
+}
+
 async function uploadReleaseAsset(env, fileName, fileData) {
-  const releaseId = env.GITHUB_RELEASE_ID;
+  const releaseId = await resolveReleaseId(env);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
@@ -151,6 +209,7 @@ async function uploadReleaseAsset(env, fileName, fileData) {
 }
 
 async function getReleaseAssetUrl(env, assetId) {
+  requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
 
@@ -177,6 +236,7 @@ export {
   getRunArtifacts,
   downloadArtifact,
   deleteArtifact,
+  resolveReleaseId,
   uploadReleaseAsset,
   getReleaseAssetUrl,
 };
