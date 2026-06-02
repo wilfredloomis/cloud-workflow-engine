@@ -104,11 +104,27 @@ async function getJobLogs(env, jobId) {
     `/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`,
     env,
     {
+      redirect: 'manual',
       headers: {
         Accept: 'application/vnd.github.v3.raw',
       },
     }
   );
+
+   if (response.status === 302 || response.status === 301) {
+    const redirectUrl = response.headers.get('Location');
+    if (!redirectUrl) {
+      throw new Error('Job logs redirect is missing a Location header');
+    }
+
+    const redirectedResponse = await fetch(redirectUrl);
+    if (!redirectedResponse.ok) {
+      const text = await redirectedResponse.text();
+      throw new Error(`Failed redirected job logs fetch: ${redirectedResponse.status} ${text}`);
+    }
+
+    return redirectedResponse.text();
+  }
 
   if (!response.ok) {
     const text = await response.text();
