@@ -54,11 +54,12 @@ async function handleStatus(request, env) {
       run_number: run.run_number,
     };
 
-    // Get job steps for progress info
+    // Get job steps for progress info (fetched once, reused for error detail)
+    let cachedJobsData = null;
     try {
-      const jobsData = await getRunJobs(env, runId);
-      if (jobsData.jobs && jobsData.jobs.length > 0) {
-        const job = jobsData.jobs[0];
+      cachedJobsData = await getRunJobs(env, runId);
+      if (cachedJobsData.jobs && cachedJobsData.jobs.length > 0) {
+        const job = cachedJobsData.jobs[0];
         const steps = job.steps || [];
         const completedSteps = steps.filter(
           (s) => s.status === 'completed'
@@ -86,17 +87,23 @@ async function handleStatus(request, env) {
       console.error('Failed to get job steps:', e.message);
     }
 
-    // Include error info if failed
+    // Include error info if failed — reuse already-fetched jobsData
     if (run.conclusion === 'failure') {
       result.error = 'Build failed';
       try {
-        const jobsData = await getRunJobs(env, runId);
+        const jobsData = cachedJobsData || (await getRunJobs(env, runId));
         if (jobsData.jobs && jobsData.jobs.length > 0) {
-          const failedStep = jobsData.jobs[0].steps?.find(
-            (s) => s.conclusion === 'failure'
-          );
+          const steps = jobsData.jobs[0].steps || [];
+          const failedStep = steps.find((s) => s.conclusion === 'failure');
           if (failedStep) {
             result.error = `Failed at step: ${failedStep.name}`;
+          }
+          // Also surface any step-level error annotation
+          const failedStepNumber = failedStep
+            ? steps.indexOf(failedStep) + 1
+            : null;
+          if (failedStepNumber !== null) {
+            result.failed_step_number = failedStepNumber;
           }
         }
       } catch (e) {
@@ -170,6 +177,11 @@ async function handleJobLive(request, env) {
 
     if (run.conclusion === 'failure') {
       result.error = 'Build failed';
+      const failedStep = result.steps.find((s) => s.conclusion === 'failure');
+      if (failedStep) {
+        result.error = `Failed at step: ${failedStep.name}`;
+        result.failed_step_number = failedStep.number;
+      }
     }
 
     return jsonResponse(result);
