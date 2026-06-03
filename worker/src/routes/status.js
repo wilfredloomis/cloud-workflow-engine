@@ -52,6 +52,11 @@ async function handleStatus(request, env) {
       status: run.status,
       conclusion: run.conclusion || null,
       run_number: run.run_number,
+      current_step: null,
+      total_steps: null,
+      step_name: null,
+      steps: [],
+      error: null,
     };
 
     // Get job steps for progress info (fetched once, reused for error detail)
@@ -150,7 +155,11 @@ async function handleJobLive(request, env) {
       status: run.status,
       conclusion: run.conclusion || null,
       run_number: run.run_number,
+      current_step: null,
+      total_steps: null,
+      step_name: null,
       steps: [],
+      error: null,
     };
 
     if (jobsData.jobs && jobsData.jobs.length > 0) {

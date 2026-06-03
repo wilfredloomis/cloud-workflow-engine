@@ -1,5 +1,5 @@
 import { jsonResponse, errorResponse } from '../utils/json.js';
-import { triggerWorkflow, getLatestRun, getReleaseAssetUrl } from '../github.js';
+import { triggerWorkflow, getLatestRun } from '../github.js';
 import { AppError } from '../utils/errors.js';
 
 async function waitForRun(env, jobId, attempts = 4, delayMs = 1500) {
@@ -39,23 +39,10 @@ async function handleDispatchJob(request, env) {
   if (!job_id) return errorResponse('Missing job_id');
   if (!app_name) return errorResponse('Missing app_name');
 
-  // Build source URL from asset_id if not provided directly
-  let resolvedSourceUrl = source_url || '';
-  if (!resolvedSourceUrl && asset_id) {
-    try {
-      resolvedSourceUrl = await getReleaseAssetUrl(env, asset_id);
-    } catch (error) {
-      // Fallback: construct URL directly
-      const owner = env.GITHUB_OWNER;
-      const repo = env.GITHUB_REPO;
-      resolvedSourceUrl = `https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset_id}`;
-    }
-  }
-
   try {
     await triggerWorkflow(env, {
       job_id,
-      source_url: resolvedSourceUrl,
+      source_url: source_url || '',
       asset_id: asset_id ? String(asset_id) : '',
       app_name,
       package_name,
