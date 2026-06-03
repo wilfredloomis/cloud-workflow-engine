@@ -10,6 +10,10 @@ KEYSTORE_PASSWORD="$3"
 KEY_ALIAS="$4"
 KEY_PASSWORD="$5"
 
+if [ -z "$KEY_PASSWORD" ]; then
+  KEY_PASSWORD="$KEYSTORE_PASSWORD"
+fi
+
 if [ -z "$APK_PATH" ] || [ -z "$KEYSTORE_PATH" ]; then
   echo "Usage: $0 /path/to/apk /path/to/keystore keystore_password key_alias key_password"
   exit 1
