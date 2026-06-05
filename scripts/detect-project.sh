@@ -17,15 +17,17 @@ if [ -f pubspec.yaml ]; then
   exit 0
 fi
 
-# Pre-check: note whether gradle files exist (at root OR inside an android/
-# subdirectory) so we can use this inside the package.json branch to avoid
-# misclassifying workspace/tool package.json files as React Native.
+# Root Gradle files are unambiguous for uploaded projects like Blcorer5r9,
+# which include package.json only for helper tooling.
 HAS_GRADLE=false
 if [ -f settings.gradle ] || [ -f settings.gradle.kts ] || \
-   [ -f build.gradle ] || [ -f build.gradle.kts ] || \
-   [ -f android/settings.gradle ] || [ -f android/settings.gradle.kts ] || \
-   [ -f android/build.gradle ] || [ -f android/build.gradle.kts ]; then
+   [ -f build.gradle ] || [ -f build.gradle.kts ] || [ -f gradlew ]; then
   HAS_GRADLE=true
+fi
+
+if [ "$HAS_GRADLE" = "true" ]; then
+  echo "native_android"
+  exit 0
 fi
 
 if [ -f package.json ]; then
@@ -53,27 +55,14 @@ if [ -f package.json ]; then
     exit 0
   fi
 
-  # React Native — must be identified by a real React Native dependency.
-  # A bare "react"/"react-dom" web app is NOT React Native, and the mere
-  # presence of an android/ or ios/ folder is NOT sufficient evidence either
-  # (native Android, Capacitor, Cordova and TWA web projects all ship those
-  # folders). Require the "react-native" package, the @react-native-community
-  # /@react-native scoped packages, or the react-native CLI to be present.
+  # React Native — explicit dependency OR presence of android/ios directories
   if grep -qE '"react-native"\s*:' package.json 2>/dev/null || \
-     grep -qE '"@react-native(-community)?/' package.json 2>/dev/null; then
+     [ -d android ] || [ -d ios ]; then
     echo "react_native"
     exit 0
   fi
 
-  # If gradle/android files exist alongside an unrecognised (non-RN)
-  # package.json it is a native Android project that happens to ship a
-  # workspace/tooling package.json (or a web project wrapped for Android).
-  if [ "$HAS_GRADLE" = "true" ] || [ -d android ]; then
-    echo "native_android"
-    exit 0
-  fi
-
-  # Unrecognised JS project (plain web app, library, etc.)
+  # Unrecognised JS project
   echo "unknown"
   exit 1
 fi
