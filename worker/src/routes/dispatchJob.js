@@ -40,6 +40,17 @@ async function handleDispatchJob(request, env) {
   if (!app_name) return errorResponse('Missing app_name');
 
   try {
+    const existingRun = await getLatestRun(env, job_id);
+    if (existingRun) {
+      return jsonResponse({
+        ok: true,
+        job_id,
+        run_id: String(existingRun.id),
+        run_number: existingRun.run_number,
+        resumed: true,
+      });
+    }
+
     await triggerWorkflow(env, {
       job_id,
       source_url: source_url || '',
