@@ -145,7 +145,7 @@ async function getRunArtifacts(env, runId) {
   );
 }
 
-async function downloadArtifact(env, artifactId) {
+async function downloadArtifact(env, artifactId, range = null) {
   requireGithubConfig(env, ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO']);
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
@@ -164,8 +164,10 @@ async function downloadArtifact(env, artifactId) {
       throw new Error('Artifact download redirect is missing a Location header');
     }
 
-    const redirectedResponse = await fetch(redirectUrl);
-    if (!redirectedResponse.ok) {
+    const redirectedResponse = await fetch(redirectUrl, {
+      headers: range ? { Range: range } : {},
+    });
+    if (!redirectedResponse.ok && redirectedResponse.status !== 416) {
       throw new Error(`Failed redirected artifact download: ${redirectedResponse.status}`);
     }
 
